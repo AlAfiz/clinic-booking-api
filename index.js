@@ -4,6 +4,15 @@ const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const app = express();
+app.use((req, res, next) => {
+  if (req.path === '/health') return next();
+
+  const key = req.get('X-API-Key');
+  if (!process.env.API_KEY || key !== process.env.API_KEY) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+});
 app.use(express.json());
 
 const pool = new Pool({
@@ -79,13 +88,43 @@ app.get('/slots', async (req, res) => {
 });
 app.post('/bookings', async (req, res) => {
   try {
-    const { slot_id, name, email } = req.body;
+    const body = req.body || {};
 
-    const slot = await pool.query('SELECT id FROM slots WHERE id = $1', [slot_id]);
+    // 1. Check the input is well-formed
+    if (typeof body.slot_id !== 'string' || body.slot_id.trim() === '') {
+      return res.status(400).json({ error: 'slot_id is required' });
+    }
+    if (typeof body.name !== 'string' || body.name.trim() === '') {
+      return res.status(400).json({ error: 'name is required' });
+    }
+    if (typeof body.email !== 'string' || body.email.trim() === '') {
+      return res.status(400).json({ error: 'email is required' });
+    }
+
+    const slot_id = body.slot_id;
+    const name = body.name.trim();
+    const email = body.email.trim().toLowerCase();
+
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!emailOk) {
+      return res.status(400).json({ error: 'email is not valid' });
+    }
+
+    // 2. Check the slot exists
+    const slot = await pool.query(
+      'SELECT id, start_time FROM slots WHERE id = $1',
+      [slot_id]
+    );
     if (slot.rows.length === 0) {
       return res.status(404).json({ error: 'slot not found' });
     }
 
+    // 3. Check the slot hasn't started
+    if (new Date(slot.rows[0].start_time) <= new Date()) {
+      return res.status(400).json({ error: 'slot has already started' });
+    }
+
+    // 4. Create the booking
     const id = crypto.randomUUID();
     const result = await pool.query(
       `INSERT INTO bookings (id, slot_id, name, email, status)
