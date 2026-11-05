@@ -135,6 +135,9 @@ app.post('/bookings', async (req, res) => {
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'slot already booked' });
+    }
     console.error(err);
     res.status(500).json({ error: 'could not create booking' });
   }
@@ -153,6 +156,33 @@ app.get('/bookings/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'could not get booking' });
+  }
+});
+app.delete('/bookings/:id', async (req, res) => {
+  try {
+    // Try to cancel, but only if it is currently confirmed
+    const updated = await pool.query(
+      `UPDATE bookings SET status = 'cancelled'
+       WHERE id = $1 AND status = 'confirmed'
+       RETURNING id, slot_id, name, email, status, created_at`,
+      [req.params.id]
+    );
+    if (updated.rows.length === 1) {
+      return res.json(updated.rows[0]);
+    }
+
+    // Nothing was updated: either it doesn't exist, or it was already cancelled
+    const existing = await pool.query(
+      'SELECT id FROM bookings WHERE id = $1',
+      [req.params.id]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'booking not found' });
+    }
+    res.status(409).json({ error: 'booking already cancelled' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'could not cancel booking' });
   }
 });
 const port = process.env.PORT || 3000;

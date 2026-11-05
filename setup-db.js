@@ -27,7 +27,11 @@ async function main() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS one_confirmed_per_slot
+    ON bookings (slot_id)
+    WHERE status = 'confirmed'
+  `);
   const result = await client.query(`
     SELECT table_name FROM information_schema.tables
     WHERE table_schema = 'public' AND table_name IN ('slots', 'bookings')
