@@ -28,6 +28,15 @@ async function main() {
     )
   `);
   await client.query(`
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      key           TEXT PRIMARY KEY,
+      request_hash  TEXT NOT NULL,
+      status_code   INTEGER NOT NULL,
+      response_body JSONB NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS one_confirmed_per_slot
     ON bookings (slot_id)
     WHERE status = 'confirmed'
