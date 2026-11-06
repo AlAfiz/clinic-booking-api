@@ -20,6 +20,34 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// --- Level 5: rate limit, 5 attempts per email per minute ---
+const attempts = new Map(); // email -> list of attempt times (ms)
+const RATE_LIMIT = 5;
+const WINDOW_MS = 60 * 1000;
+
+function checkRateLimit(email) {
+  const now = Date.now();
+  const recent = (attempts.get(email) || []).filter((t) => now - t < WINDOW_MS);
+
+  if (recent.length >= RATE_LIMIT) {
+    attempts.set(email, recent);
+    const retryAfter = Math.max(1, Math.ceil((recent[0] + WINDOW_MS - now) / 1000));
+    return { limited: true, retryAfter };
+  }
+
+  recent.push(now);
+  attempts.set(email, recent);
+  return { limited: false };
+}
+
+// Tidy up old entries once a minute so the Map doesn't grow forever
+setInterval(() => {
+  const now = Date.now();
+  for (const [email, times] of attempts) {
+    if (times.every((t) => now - t >= WINDOW_MS)) attempts.delete(email);
+  }
+}, 60 * 1000).unref();
+
 app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
@@ -42,6 +70,7 @@ app.post('/reset', async (req, res) => {
       );
     }
     await client.query('COMMIT');
+    attempts.clear(); // a reset also starts the rate-limit counters from zero
     res.json({ ok: true, slots: slots.length });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -51,6 +80,7 @@ app.post('/reset', async (req, res) => {
     client.release();
   }
 });
+
 app.get('/slots', async (req, res) => {
   try {
     const provider = req.query.provider;
@@ -86,6 +116,7 @@ app.get('/slots', async (req, res) => {
     res.status(500).json({ error: 'could not list slots' });
   }
 });
+
 // Does the booking work and returns { status, body }. It never sends the response itself.
 async function createBooking(client, rawBody) {
   const body = rawBody || {};
@@ -134,6 +165,16 @@ async function createBooking(client, rawBody) {
 }
 
 app.post('/bookings', async (req, res) => {
+  // Level 5: count this attempt before anything else, so failed attempts count too
+  const rawEmail = req.body && req.body.email;
+  if (typeof rawEmail === 'string' && rawEmail.trim() !== '') {
+    const rl = checkRateLimit(rawEmail.trim().toLowerCase());
+    if (rl.limited) {
+      res.set('Retry-After', String(rl.retryAfter));
+      return res.status(429).json({ error: 'too many attempts, try again later' });
+    }
+  }
+
   const idemKey = req.get('Idempotency-Key');
   const client = await pool.connect();
   try {
@@ -185,6 +226,7 @@ app.post('/bookings', async (req, res) => {
     client.release();
   }
 });
+
 app.get('/bookings', async (req, res) => {
   try {
     // email is required
@@ -266,6 +308,7 @@ app.get('/bookings', async (req, res) => {
     res.status(500).json({ error: 'could not list bookings' });
   }
 });
+
 app.get('/bookings/:id', async (req, res) => {
   try {
     const result = await pool.query(
@@ -282,6 +325,7 @@ app.get('/bookings/:id', async (req, res) => {
     res.status(500).json({ error: 'could not get booking' });
   }
 });
+
 app.delete('/bookings/:id', async (req, res) => {
   try {
     // Try to cancel, but only if it is currently confirmed
@@ -309,6 +353,7 @@ app.delete('/bookings/:id', async (req, res) => {
     res.status(500).json({ error: 'could not cancel booking' });
   }
 });
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log('Server running on port ' + port);
