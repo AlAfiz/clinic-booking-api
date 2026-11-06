@@ -361,7 +361,12 @@ app.delete('/bookings/:id', async (req, res) => {
     res.status(500).json({ error: 'could not cancel booking' });
   }
 });
+app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
+app.use((err, req, res, next) => {
+  const status = err.status || 500;
+  res.status(status).json({ error: status === 400 ? 'invalid JSON body' : 'internal error' });
+});
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log('Server running on port ' + port);
