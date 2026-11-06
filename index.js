@@ -1,11 +1,14 @@
 require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
+const path = require('path');
 const { Pool } = require('pg');
 
 const app = express();
 app.use((req, res, next) => {
-  if (req.path === '/health') return next();
+  // Open paths: the web page itself and the two routes it uses. Everything else needs the key.
+  const open = ['/', '/health', '/ui/slots', '/ui/bookings'];
+  if (open.includes(req.path)) return next();
 
   const key = req.get('X-API-Key');
   if (!process.env.API_KEY || key !== process.env.API_KEY) {
@@ -52,6 +55,11 @@ app.get('/health', (req, res) => {
   res.json({ ok: true });
 });
 
+// The patient-facing web page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.post('/reset', async (req, res) => {
   const slots = req.body.slots;
   if (!Array.isArray(slots)) {
@@ -81,7 +89,7 @@ app.post('/reset', async (req, res) => {
   }
 });
 
-app.get('/slots', async (req, res) => {
+app.get(['/slots', '/ui/slots'], async (req, res) => {
   try {
     const provider = req.query.provider;
     const params = [];
@@ -164,7 +172,7 @@ async function createBooking(client, rawBody) {
   return { status: 201, body: result.rows[0] };
 }
 
-app.post('/bookings', async (req, res) => {
+app.post(['/bookings', '/ui/bookings'], async (req, res) => {
   // Level 5: count this attempt before anything else, so failed attempts count too
   const rawEmail = req.body && req.body.email;
   if (typeof rawEmail === 'string' && rawEmail.trim() !== '') {

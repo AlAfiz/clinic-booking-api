@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book an appointment</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#5b6672;--line:#dde2e8;--accent:#1f6feb;--btn:#fff;--ok:#1a7f37;--err:#c62828}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1318;--card:#171c22;--text:#e8ecf0;--muted:#9aa5b1;--line:#2a323b;--accent:#58a6ff;--btn:#0b1220;--ok:#3fb950;--err:#ff7b72}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--text)}
+main{max-width:640px;margin:0 auto;padding:24px 16px}
+h1{font-size:1.5rem;margin:0 0 4px}
+h2{font-size:1.2rem;margin:0 0 8px}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+.slot{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.slot b{display:block}
+.slot span{color:var(--muted);font-size:.9rem}
+button{font:inherit;border:0;border-radius:8px;padding:8px 16px;background:var(--accent);color:var(--btn);cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+label{display:block;margin:12px 0 4px;font-size:.9rem;color:var(--muted)}
+input{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.row{display:flex;gap:8px;margin-top:16px}
+.msg{margin:12px 0 0;color:var(--err)}
+.ok{color:var(--ok)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:12px 0}
+dt{color:var(--muted)}
+dd{margin:0;word-break:break-all}
+[hidden]{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>Book an appointment</h1>
+  <p class="sub">Pick an available slot, then enter your details.</p>
+
+  <section id="listView">
+    <p id="notice" class="msg" hidden></p>
+    <div id="slots">Loading…</div>
+  </section>
+
+  <section id="formView" hidden>
+    <div class="card">
+      <h2>Your details</h2>
+      <p id="chosenInfo" class="sub"></p>
+      <form id="bookForm">
+        <label for="name">Full name</label>
+        <input id="name" autocomplete="name" required>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="email" required>
+        <p id="formMsg" class="msg" hidden></p>
+        <div class="row">
+          <button id="submitBtn" type="submit">Confirm booking</button>
+          <button type="button" class="ghost" id="backBtn">Back</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section id="doneView" hidden>
+    <div class="card">
+      <h2 class="ok">Booking confirmed</h2>
+      <dl id="details"></dl>
+      <button id="againBtn" type="button">Book another</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let chosen = null;
+let idemKey = null;
+
+const newKey = () =>
+  (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2);
+
+const fmtStart = (iso) => new Date(iso).toLocaleString([], {
+  weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit'
+});
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+function show(view) {
+  for (const v of ['listView', 'formView', 'doneView']) $(v).hidden = v !== view;
+}
+
+function setMsg(id, text) {
+  $(id).textContent = text || '';
+  $(id).hidden = !text;
+}
+
+async function loadSlots() {
+  $('slots').textContent = 'Loading…';
+  try {
+    const r = await fetch('/ui/slots');
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not load slots');
+    renderSlots(data.slots);
+  } catch (e) {
+    $('slots').textContent = 'Could not load slots. Please refresh the page.';
+  }
+}
+
+function renderSlots(slots) {
+  const box = $('slots');
+  box.replaceChildren();
+  if (!slots.length) {
+    box.textContent = 'There are no slots at the moment.';
+    return;
+  }
+  for (const s of slots) {
+    const started = new Date(s.start) <= new Date();
+    const card = document.createElement('div');
+    card.className = 'card slot';
+
+    const info = document.createElement('div');
+    const who = document.createElement('b');
+    who.textContent = s.provider;
+    const when = document.createElement('span');
+    when.textContent = fmtStart(s.start) + ' to ' + fmtTime(s.end);
+    info.append(who, when);
+
+    const btn = document.createElement('button');
+    btn.textContent = !s.available ? 'Booked' : started ? 'Closed' : 'Book';
+    btn.disabled = !s.available || started;
+    btn.onclick = () => choose(s);
+
+    card.append(info, btn);
+    box.append(card);
+  }
+}
+
+function choose(slot) {
+  chosen = slot;
+  idemKey = null;
+  $('chosenInfo').textContent = slot.provider + ', ' + fmtStart(slot.start);
+  setMsg('formMsg', '');
+  setMsg('notice', '');
+  show('formView');
+  $('name').focus();
+}
+
+$('backBtn').onclick = () => show('listView');
+
+$('againBtn').onclick = () => {
+  $('bookForm').reset();
+  show('listView');
+  loadSlots();
+};
+
+$('bookForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = $('submitBtn');
+  btn.disabled = true;
+  setMsg('formMsg', '');
+
+  // Same key is reused only if the network failed, so a retry can never double-book
+  if (!idemKey) idemKey = newKey();
+
+  try {
+    const r = await fetch('/ui/bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idemKey },
+      body: JSON.stringify({ slot_id: chosen.id, name: $('name').value, email: $('email').value })
+    });
+    const data = await r.json().catch(() => ({}));
+    idemKey = null; // the server answered, so the next click is a fresh attempt
+
+    if (r.status === 201) return showDone(data);
+
+    if (r.status === 409) {
+      show('listView');
+      setMsg('notice', 'Sorry, that slot was just taken. Please pick another one.');
+      return loadSlots();
+    }
+    if (r.status === 429) {
+      const wait = r.headers.get('Retry-After');
+      return setMsg('formMsg', 'Too many attempts. Please wait ' + (wait || 'a minute') + ' seconds and try again.');
+    }
+    if (r.status === 404) {
+      show('listView');
+      setMsg('notice', 'That slot no longer exists. Please pick another one.');
+      return loadSlots();
+    }
+    setMsg('formMsg', data.error || 'Something went wrong. Please try again.');
+  } catch (err) {
+    setMsg('formMsg', 'Network problem. Your booking was not lost; press Confirm again to retry safely.');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function showDone(b) {
+  const rows = [
+    ['Booking ID', b.id],
+    ['Provider', chosen.provider],
+    ['When', fmtStart(chosen.start)],
+    ['Name', b.name],
+    ['Email', b.email],
+    ['Status', b.status]
+  ];
+  const dl = $('details');
+  dl.replaceChildren();
+  for (const [k, v] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    dl.append(dt, dd);
+  }
+  show('doneView');
+}
+
+loadSlots();
+</script>
+</body>
+</html>
